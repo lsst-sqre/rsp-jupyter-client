@@ -47,7 +47,7 @@ class AuthenticatedUser(User):
     scopes: list[str] = Field(
         ...,
         title="Token scopes",
-        examples=[["exec:notebook", "read:tap", "read:portal"]],
+        examples=[["exec:notebook", "read:tap", "exec:portal"]],
     )
 
     token: str = Field(

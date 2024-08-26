@@ -12,6 +12,7 @@ from collections.abc import AsyncIterator, Callable, Coroutine
 from dataclasses import dataclass
 from datetime import timedelta
 from functools import wraps
+from pathlib import Path
 from types import TracebackType
 from typing import Concatenate, Literal, ParamSpec, Self, TypeVar
 from urllib.parse import urljoin, urlparse
@@ -385,6 +386,46 @@ class JupyterLabSession:
 
         # Return the accumulated output.
         return result
+
+    async def run_notebook(self, notebook: Path) -> list[str]:
+        """Run a notebook of Python code in a Jupyter lab kernel.
+
+        Parameters
+        ----------
+        notebook
+            Path of notebook (relative to $HOME) to run.
+
+        Returns
+        -------
+        list[str]
+            Output from the kernel, one string per cell.
+
+        Raises
+        ------
+        JupyterCodeExecutionError
+            Raised if an error was reported by the Jupyter lab kernel.
+        JupyterWebSocketError
+            Raised if there was a WebSocket protocol error while running code
+            or waiting for the response.
+        RuntimeError
+            Raised if called before entering the context and thus before
+            creating the WebSocket session.
+        """
+        nb_url_path = str(notebook)
+        url = self._url_for(
+            f"user/{self._username}/api/contents/{nb_url_path}"
+        )
+        resp = await self._client.get(url)
+        sources = [
+            x["source"].strip()
+            for x in resp.json()["content"]["cells"]
+            if x["cell_type"] == "code" and x["source"].strip()
+        ]
+        retlist: list[str] = []
+        for cellsrc in sources:
+            output = await self.run_python(cellsrc)
+            retlist.append(output)
+        return retlist
 
     def _parse_message(
         self, message: str | bytes, message_id: str
