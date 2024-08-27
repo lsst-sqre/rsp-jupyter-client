@@ -7,6 +7,7 @@ Jupyter kernels remotely.
 from __future__ import annotations
 
 import asyncio
+import datetime
 import json
 from collections.abc import AsyncIterator, Callable, Coroutine
 from dataclasses import dataclass
@@ -18,6 +19,7 @@ from typing import Concatenate, Literal, ParamSpec, Self, TypeVar
 from urllib.parse import urljoin, urlparse
 from uuid import uuid4
 
+import httpx
 from httpx import AsyncClient, Cookies, HTTPError, Response
 from httpx_sse import EventSource, aconnect_sse
 from safir.datetime import current_datetime
@@ -29,11 +31,13 @@ from websockets.exceptions import WebSocketException
 from .constants import WEBSOCKET_OPEN_TIMEOUT
 from .exceptions import (
     CodeExecutionError,
+    ExecutionAPIError,
     JupyterProtocolError,
     JupyterTimeoutError,
     JupyterWebError,
     JupyterWebSocketError,
 )
+from .models.extension import NotebookExecutionResult
 from .models.image import NubladoImage
 from .models.user import AuthenticatedUser
 
@@ -119,6 +123,23 @@ class JupyterOutput:
 
     Parsing WebSocket messages will result in a stream of these objects with
     partial output, ending in a final one with the ``done`` flag set.
+
+    Note that there is some subtlety here: a notebook cell can either
+    print its output (that is, write to stdout), or, in an executed notebook,
+    the cell will display the last Python command run.
+
+    These are currently represented by two unhandled message types,
+    ``execute_result`` (which is the result of the last Python command run;
+    this is analogous to what you get in the Pytheon REPL loop) and
+    ``display_data``.  ``display_data`` would be what you get, for instance,
+    when you ask Bokeh to show a figure: it's a bunch of Javascript that
+    will be interpreted by your browser.
+
+    The protocol is found at https://jupyter-client.readthedocs.io/en/latest/
+    but what we want to use is half a layer above that.  We care what
+    some messages on the various channels are, but not at all about the
+    low-level implementation details of how those channels are established
+    over ZMQ, for instance.
     """
 
     content: str
@@ -339,8 +360,9 @@ class JupyterLabSession:
         request = {
             "header": {
                 "username": self._username,
-                "version": "5.0",
+                "version": "5.4",
                 "session": self._session_id,
+                "date": datetime.datetime.now(datetime.UTC).isoformat(),
                 "msg_id": message_id,
                 "msg_type": "execute_request",
             },
@@ -415,17 +437,108 @@ class JupyterLabSession:
         url = self._url_for(
             f"user/{self._username}/api/contents/{nb_url_path}"
         )
+        self._logger.debug(f"Getting content from {url}")
         resp = await self._client.get(url)
         sources = [
             x["source"].strip()
             for x in resp.json()["content"]["cells"]
             if x["cell_type"] == "code" and x["source"].strip()
         ]
+        self._logger.debug(f"Content: {sources}")
         retlist: list[str] = []
         for cellsrc in sources:
             output = await self.run_python(cellsrc)
             retlist.append(output)
         return retlist
+
+    async def run_notebook_via_rsp_extension(
+        self, *, path: Path | None = None, content: str | None = None
+    ) -> NotebookExecutionResult:
+        """Run a notebook through the RSP ``noninteractive`` extension, which
+        will return the the executed notebook.
+
+        This is our way around having to deal individually with the
+        ``execute_result`` and ``data_display`` message types, which can
+        represent a wild variety of use cases: those things will be found
+        in the output notebook and it is the caller's responsibility to deal
+        with them.
+
+        Parameters
+        ----------
+        path
+            Path of notebook (relative to $HOME) to run.
+
+        content
+            Notebook content as a string.  Only used if ``path`` is ``None``.
+
+        Returns
+        -------
+        NotebookExecutionResult
+            The executed Jupyter Notebook.
+
+        Raises
+        ------
+        ExecutionAPIError
+            Raised if there is an error interacting with the JupyterLab
+            Notebook execution extension.
+
+        RuntimeError
+            Raised if neither notebook path nor notebook contents are supplied.
+        """
+        if path is not None:
+            str_path = str(path)
+            url = self._url_for(
+                f"user/{self._username}/api/contents/{str_path}"
+            )
+            self._logger.debug(f"Getting content from {url}")
+            resp = await self._client.get(url)
+            if resp.status_code == 200:
+                ct = json.loads(resp.text)
+                if "content" in ct:
+                    content = json.dumps(ct["content"])
+        if not content:
+            raise RuntimeError("No notebook content to execute")
+        exec_url = self._url_for(f"user/{self._username}/rubin/execution")
+        try:
+            # The timeout is designed to catch issues connecting to JupyterLab
+            # but to wait as long as possible for the notebook itself
+            # to execute.
+            headers: dict[str, str] = {}
+            headers.update(self._client.headers)
+            if self._xsrf:
+                headers["X-XSRFToken"] = self._xsrf
+            r = await self._client.post(
+                exec_url,
+                content=content,
+                headers=headers,
+                timeout=httpx.Timeout(5.0, read=None),
+            )
+            r.raise_for_status()
+        except httpx.ReadTimeout as e:
+            raise ExecutionAPIError(
+                url=exec_url,
+                username=self._username,
+                status=500,
+                reason="/execution endpoint timeout",
+                method="POST",
+                body=str(e),
+            ) from e
+        except httpx.HTTPStatusError as e:
+            # This often occurs from timeouts, so we want to convert the
+            # generic HTTPError to an ExecutionAPIError
+            raise ExecutionAPIError(
+                url=exec_url,
+                username=self._username,
+                status=r.status_code,
+                reason="Internal Server Error",
+                method="POST",
+                body=str(e),
+            ) from e
+        if r.status_code != 200:
+            raise ExecutionAPIError.from_response(self._username, r)
+        self._logger.debug("Got response from /rubin/execution", text=r.text)
+
+        return NotebookExecutionResult.model_validate_json(r.text)
 
     def _parse_message(
         self, message: str | bytes, message_id: str
@@ -460,7 +573,7 @@ class JupyterLabSession:
         if data.get("parent_header", {}).get("msg_id") != message_id:
             return None
 
-        # Analyse the message type to figure out what to do with the response.
+        # Analyze the message type to figure out what to do with the response.
         msg_type = data["msg_type"]
         if msg_type in self._IGNORED_MESSAGE_TYPES:
             return None
@@ -598,9 +711,9 @@ class RSPJupyterClient:
         self._logger = logger.bind(user=user.username)
 
         # Construct a connection pool to use for requests to JupyterHub. We
-        # have to create a separate connection pool for every monkey, since
+        # have to create a separate connection pool for every user, since
         # each will get user-specific cookies set by JupyterHub. If we shared
-        # connection pools, monkeys would overwrite each other's cookies and
+        # connection pools, users would overwrite each other's cookies and
         # get authentication failures from labs.
         headers = {"Authorization": f"Bearer {user.token}"}
         self._client = AsyncClient(

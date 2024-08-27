@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import datetime
 import re
-from datetime import datetime
 from typing import Self
 
+import httpx
 from safir.datetime import format_datetime_for_logging
 from safir.slack.blockkit import (
     SlackBaseBlock,
@@ -91,8 +92,8 @@ class MobuSlackException(SlackException):
         msg: str,
         user: str | None = None,
         *,
-        started_at: datetime | None = None,
-        failed_at: datetime | None = None,
+        started_at: datetime.datetime | None = None,
+        failed_at: datetime.datetime | None = None,
     ) -> None:
         super().__init__(msg, user, failed_at=failed_at)
         self.started_at = started_at
@@ -249,6 +250,58 @@ class CodeExecutionError(MobuSlackException):
         )
 
 
+class ExecutionAPIError(MobuSlackException):
+    """An HTTP request to the execution endpoint failed."""
+
+    @classmethod
+    def from_response(cls, username: str, response: httpx.Response) -> Self:
+        return cls(
+            url=str(response.url),
+            username=username,
+            status=response.status_code,
+            reason=response.reason_phrase,
+            method=response.request.method,
+            body=response.text,
+        )
+
+    @classmethod
+    async def from_stream(cls, username: str, stream: httpx.Response) -> Self:
+        body_bytes = await stream.aread()
+        return cls(
+            url=str(stream.url),
+            username=username,
+            status=stream.status_code,
+            reason=stream.reason_phrase,
+            method=stream.request.method,
+            body=body_bytes.decode("utf-8"),
+        )
+
+    def __init__(
+        self,
+        *,
+        url: str,
+        username: str,
+        status: int,
+        reason: str | None,
+        method: str,
+        body: str | None = None,
+    ) -> None:
+        self.url = url
+        self.status = status
+        self.reason = reason
+        self.method = method
+        self.msg = body
+        self.user = username
+        self.timestamp = datetime.datetime.now(tz=datetime.UTC)
+        super().__init__(f"Status {status} from {method} {url}")
+
+    def __str__(self) -> str:
+        return (
+            f"{self.user}: status {self.status} ({self.reason}) from"
+            f" {self.method} {self.url}"
+        )
+
+
 class JupyterProtocolError(MobuSlackException):
     """Some error occurred when talking to JupyterHub or JupyterLab."""
 
@@ -307,7 +360,7 @@ class JupyterTimeoutError(MobuSlackException):
         user: str,
         log: str | None = None,
         *,
-        started_at: datetime | None = None,
+        started_at: datetime.datetime | None = None,
     ) -> None:
         super().__init__(msg, user, started_at=started_at)
         self.log = log
