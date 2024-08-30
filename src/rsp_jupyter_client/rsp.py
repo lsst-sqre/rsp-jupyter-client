@@ -696,6 +696,9 @@ class RSPJupyterClient:
     from the one used by the rest of the application, since it needs to
     isolate the cookies set by JupyterHub and the lab from those for any other
     user.
+
+    Although principally intended as a Lab/Hub client, the underlying
+    `httpx.AsyncClient` is exposed via the `http` property.
     """
 
     def __init__(
@@ -718,6 +721,7 @@ class RSPJupyterClient:
         headers = {"Authorization": f"Bearer {user.token}"}
         self._client = AsyncClient(
             follow_redirects=True,
+            base_url=base_url,
             headers=headers,
             timeout=timeout.total_seconds(),
         )
@@ -728,6 +732,10 @@ class RSPJupyterClient:
     async def close(self) -> None:
         """Close the underlying HTTP connection pool."""
         await self._client.aclose()
+
+    @property
+    def http(self) -> AsyncClient:
+        return self._client
 
     @_convert_exception
     async def auth_to_hub(self) -> None:
