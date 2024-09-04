@@ -20,6 +20,7 @@ from urllib.parse import urljoin, urlparse
 from uuid import uuid4
 
 import httpx
+import structlog
 from httpx import AsyncClient, Cookies, HTTPError, Response
 from httpx_sse import EventSource, aconnect_sse
 from safir.datetime import current_datetime
@@ -684,7 +685,7 @@ class RSPJupyterClient:
     base_url
         Base URL for JupyterHub and the proxy to talk to the labs.
     logger
-        Logger to use.
+        Logger to use (optional)
     timeout
         Timeout to use when talking to JupyterHub and Jupyter lab. This is
         used as a connection, read, and write timeout for all regular HTTP
@@ -706,11 +707,13 @@ class RSPJupyterClient:
         *,
         user: AuthenticatedUser,
         base_url: str,
-        logger: BoundLogger,
+        logger: BoundLogger | None = None,
         timeout: timedelta = timedelta(seconds=30),
     ) -> None:
         self.user = user
         self._base_url = base_url
+        if logger is None:
+            logger = structlog.get_logger()
         self._logger = logger
 
         # Construct a connection pool to use for requests to JupyterHub. We
