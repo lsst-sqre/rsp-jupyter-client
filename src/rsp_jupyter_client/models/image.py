@@ -4,10 +4,9 @@ from __future__ import annotations
 
 from abc import ABCMeta, abstractmethod
 from enum import Enum
+from typing import Literal
 
 from pydantic import BaseModel, Field
-
-from typing import Literal
 
 __all__ = [
     "NubladoImage",
@@ -71,6 +70,7 @@ class NubladoImage(BaseModel, metaclass=ABCMeta):
         dict of str
             Post data to send to the JupyterHub spawn page.
         """
+
 
 class NubladoImageByClass(NubladoImage):
     """Spawn the recommended image."""

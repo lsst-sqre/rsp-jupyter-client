@@ -20,10 +20,11 @@ from urllib.parse import urljoin, urlparse
 from uuid import uuid4
 
 import httpx
+import structlog
 from httpx import AsyncClient, Cookies, HTTPError, Response
 from httpx_sse import EventSource, aconnect_sse
 from safir.datetime import current_datetime
-from structlog.stdlib import BoundLogger
+from structlog import BoundLogger
 from websockets.client import WebSocketClientProtocol
 from websockets.client import connect as websocket_connect
 from websockets.exceptions import WebSocketException
@@ -706,11 +707,15 @@ class RSPJupyterClient:
         *,
         user: AuthenticatedUser,
         base_url: str,
-        logger: BoundLogger,
+        logger_name: str = "",
         timeout: timedelta = timedelta(seconds=30),
     ) -> None:
         self.user = user
         self._base_url = base_url
+        if not logger_name:
+            logger = structlog.get_logger(__name__)
+        else:
+            logger = structlog.get_logger(logger_name)
         self._logger = logger.bind(user=user.username)
 
         # Construct a connection pool to use for requests to JupyterHub. We
