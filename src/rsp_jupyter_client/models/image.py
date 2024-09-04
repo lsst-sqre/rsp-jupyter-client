@@ -7,6 +7,8 @@ from enum import Enum
 
 from pydantic import BaseModel, Field
 
+from typing import Literal
+
 __all__ = [
     "NubladoImage",
     "NubladoImageClass",
@@ -69,3 +71,25 @@ class NubladoImage(BaseModel, metaclass=ABCMeta):
         dict of str
             Post data to send to the JupyterHub spawn page.
         """
+
+class NubladoImageByClass(NubladoImage):
+    """Spawn the recommended image."""
+
+    image_class: Literal[
+        NubladoImageClass.RECOMMENDED,
+        NubladoImageClass.LATEST_RELEASE,
+        NubladoImageClass.LATEST_WEEKLY,
+        NubladoImageClass.LATEST_DAILY,
+    ] = Field(
+        NubladoImageClass.RECOMMENDED,
+        title="Class of image to spawn",
+    )
+
+    def to_spawn_form(self) -> dict[str, str]:
+        result = {
+            "image_class": self.image_class.value,
+            "size": self.size.value,
+        }
+        if self.debug:
+            result["enable_debug"] = "true"
+        return result
