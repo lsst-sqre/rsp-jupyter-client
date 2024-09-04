@@ -20,7 +20,6 @@ from urllib.parse import urljoin, urlparse
 from uuid import uuid4
 
 import httpx
-import structlog
 from httpx import AsyncClient, Cookies, HTTPError, Response
 from httpx_sse import EventSource, aconnect_sse
 from safir.datetime import current_datetime
@@ -707,16 +706,12 @@ class RSPJupyterClient:
         *,
         user: AuthenticatedUser,
         base_url: str,
-        logger_name: str = "",
+        logger: BoundLogger,
         timeout: timedelta = timedelta(seconds=30),
     ) -> None:
         self.user = user
         self._base_url = base_url
-        if not logger_name:
-            logger = structlog.get_logger(__name__)
-        else:
-            logger = structlog.get_logger(logger_name)
-        self._logger = logger.bind(user=user.username)
+        self._logger = logger
 
         # Construct a connection pool to use for requests to JupyterHub. We
         # have to create a separate connection pool for every user, since
