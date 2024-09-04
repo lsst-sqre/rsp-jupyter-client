@@ -707,11 +707,13 @@ class RSPJupyterClient:
         *,
         user: AuthenticatedUser,
         base_url: str,
+        hub_route: str = "/nb",
         logger: BoundLogger | None = None,
         timeout: timedelta = timedelta(seconds=30),
     ) -> None:
         self.user = user
         self._base_url = base_url
+        self._hub_route = hub_route
         if logger is None:
             logger = structlog.get_logger()
         self._logger = logger
@@ -1034,10 +1036,11 @@ class RSPJupyterClient:
         str
             Full URL to use.
         """
-        if self._base_url.endswith("/"):
-            return f"{self._base_url}{partial}"
+        hub_base = urljoin(self._base_url, self._hub_route)
+        if hub_base.endswith("/"):
+            return f"{hub_base}{partial}"
         else:
-            return f"{self._base_url}/{partial}"
+            return f"{hub_base}/{partial}"
 
     def _url_for_lab_websocket(self, username: str, kernel: str) -> str:
         """Build the URL for the WebSocket to a lab kernel."""
