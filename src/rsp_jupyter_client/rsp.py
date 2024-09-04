@@ -742,6 +742,14 @@ class RSPJupyterClient:
     def http(self) -> AsyncClient:
         return self._client
 
+    @property
+    def lab_xsrf(self) -> str | None:
+        return self._lab_xsrf
+
+    @property
+    def hub_xsrf(self) -> str | None:
+        return self._hub_xsrf
+
     @_convert_exception
     async def auth_to_hub(self) -> None:
         """Retrieve the JupyterHub home page.
