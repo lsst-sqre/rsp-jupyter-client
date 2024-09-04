@@ -23,7 +23,7 @@ import httpx
 from httpx import AsyncClient, Cookies, HTTPError, Response
 from httpx_sse import EventSource, aconnect_sse
 from safir.datetime import current_datetime
-from structlog import BoundLogger
+from structlog.stdlib import BoundLogger
 from websockets.client import WebSocketClientProtocol
 from websockets.client import connect as websocket_connect
 from websockets.exceptions import WebSocketException
